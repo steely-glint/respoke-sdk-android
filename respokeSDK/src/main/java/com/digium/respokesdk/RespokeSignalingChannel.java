@@ -11,24 +11,29 @@ package com.digium.respokesdk;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-
-import io.socket.*;
+import javax.websocket.ClientEndpoint;
+import javax.websocket.CloseReason;
+import javax.websocket.OnClose;
+import javax.websocket.OnOpen;
+import javax.websocket.Session;
 
 import com.digium.respokesdk.RestAPI.APITransaction;
+import com.ipseorama.webrtc.JSONMessageDecoder;
 import com.phono.srtplight.Log;
+import java.io.IOException;
 
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.WeakReference;
-import java.net.MalformedURLException;
-import java.security.NoSuchAlgorithmException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
-import javax.net.ssl.SSLContext;
+import javax.websocket.RemoteEndpoint;
+import javax.websocket.SendHandler;
+import javax.websocket.SendResult;
+import org.glassfish.tyrus.client.ClientManager;
 
 /**
  * The purpose of this class is to make a method call for each API call to the
@@ -36,6 +41,7 @@ import javax.net.ssl.SSLContext;
  * websocket connection, Endpoint authentication, and all App interactions
  * thereafter.
  */
+@ClientEndpoint(encoders = JSONMessageDecoder.class, decoders = JSONMessageDecoder.class)
 public class RespokeSignalingChannel {
 
     private static final String TAG = "RespokeSignalingChannel: ";
@@ -45,10 +51,10 @@ public class RespokeSignalingChannel {
     public boolean connected;
     private WeakReference<Listener> listenerReference;
     private String appToken;
-    private SocketIO client;
     private String connectionID;
     private String baseURL;
     private RespokeWorkerThread workerThread;
+    private Session session;
 
     /**
      * A delegate protocol to notify the receiver of events occurring with the
@@ -229,17 +235,12 @@ public class RespokeSignalingChannel {
     }
 
     public RespokeSignalingChannel(String token, Listener newListener, String baseURL) {
-        try {
-            appToken = token;
-            this.baseURL = baseURL;
-            listenerReference = new WeakReference<Listener>(newListener);
-            workerThread = new RespokeWorkerThread("RespokeWorkerThread");
-            workerThread.start();
-            workerThread.prepareHandler();
-            SocketIO.setDefaultSSLSocketFactory(SSLContext.getDefault());
-        } catch (NoSuchAlgorithmException ex) {
-            Log.error("Cant set SSL "+ex.toString());
-        }
+        appToken = token;
+        this.baseURL = baseURL;
+        listenerReference = new WeakReference<Listener>(newListener);
+        workerThread = new RespokeWorkerThread("RespokeWorkerThread");
+        workerThread.start();
+        workerThread.prepareHandler();
 
     }
 
@@ -247,259 +248,272 @@ public class RespokeSignalingChannel {
         return listenerReference.get();
     }
 
-    public void authenticate()  {
+    public void authenticate() {
         String connectURL = baseURL + ":" + RESPOKE_SOCKETIO_PORT + "?__sails_io_sdk_version=0.10.0&app-token=" + appToken;
+
+        if (connectURL.startsWith("https")) {
+            connectURL = "ws" + connectURL.substring(4);
+        }
         try {
-            client = new SocketIO(connectURL);
-        } catch (MalformedURLException ex) {
-            Log.error(RespokeSignalingChannel.class.getName()+ ex.toString());
+
+            URI u = new URI(connectURL);
+            ClientManager client = ClientManager.createClient();
+
+            client.connectToServer(RespokeSignalingChannel.class, u);
+        } catch (Exception e) {
+            Log.debug(TAG + "cant connect " + e.getMessage() + " url = " + connectURL);
+
         }
-        client.connect(new IOCallback() {
-            @Override
-            public void onConnect() {
-                Listener listener = listenerReference.get();
-                if (null != listener) {
-                    listener.onError("Unable to connect to Respoke. Please try again", RespokeSignalingChannel.this);
-                }
-                connected = true;
+    }
+    /*
+     @OnOpen
+     public void onOpen(Session session) {
+     // same as above
+     }
+ 
+     @OnMessage
+     public String onMessage(String message, Session session) {
+     // same as above
+     }
+ 
+     @OnClose
+     public void onClose(Session session, CloseReason closeReason) {
+     logger.info(String.format("Session %s close because of %s", session.getId(), closeReason));
+     latch.countDown();
+     }
+     */
+
+    @OnOpen
+    public void onOpen(Session s) {
+        Log.debug(TAG + "Socket connected to respoke");
+        connected = true;
+        session = s;
+    }
+
+    @OnClose
+    public void OnClose(Session session, CloseReason closeReason) {
+        Log.debug(TAG + "Socket disconnected" + closeReason.getReasonPhrase());
+
+        if (connected) {
+            connected = false;
+            workerThread.cancelAllTasks();
+
+            Listener listener = listenerReference.get();
+            if (null != listener) {
+                listener.onDisconnect(RespokeSignalingChannel.this);
             }
+        }
+    }
 
-            public void onDisconnect(Exception e) {
-                Log.debug(TAG + "Socket disconnected");
-                if (null != e) {
-                    e.printStackTrace();
-                }
+    public void onDisconnect() {
+        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+    }
 
-                if (connected) {
-                    connected = false;
-                    client = null;
-                    workerThread.cancelAllTasks();
 
-                    Listener listener = listenerReference.get();
-                    if (null != listener) {
-                        listener.onDisconnect(RespokeSignalingChannel.this);
-                    }
-                }
-            }
+    /*
+     public void onError(SocketIOException socketIOException) {
+     Log.debug(TAG + "Socket error: " + socketIOException.getMessage());
 
-            @Override
-            public void onError(SocketIOException socketIOException) {
-                Log.debug(TAG + "Socket error: " + socketIOException.getMessage());
-
-                Listener listener = listenerReference.get();
-                if (null != listener) {
-                    listener.onError(socketIOException.getMessage(), RespokeSignalingChannel.this);
-                }
-            }
-
-            public void on(String event, IOAcknowledge ack, Object... args) {
-                JSONArray arguments = new JSONArray(args);
-                switch (event) {
-                    case "join": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                String endpoint = eachEvent.getString("endpointId");
-                                String connection = eachEvent.getString("connectionId");
-                                JSONObject header = eachEvent.getJSONObject("header");
-                                String groupID = header.getString("channel");
-
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onJoinGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
-                                }
-                            } catch (JSONException e) {
-                                Log.debug(TAG + "Error parsing received event");
-                            }
-                        }
-                    }
-
-                    case "leave": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                String endpoint = eachEvent.getString("endpointId");
-                                String connection = eachEvent.getString("connectionId");
-                                JSONObject header = eachEvent.getJSONObject("header");
-                                String groupID = header.getString("channel");
-
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onLeaveGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
-                                }
-                            } catch (JSONException e) {
-                                Log.debug(TAG + "Error parsing received event");
-                            }
-                        }
-                    }
-                    case "message": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                String message = eachEvent.getString("body");
-                                JSONObject header = eachEvent.getJSONObject("header");
-                                String endpoint = header.getString("from");
-                                Date messageDate;
-
-                                if (!header.isNull("timestamp")) {
-                                    messageDate = new Date(header.getLong("timestamp"));
-                                } else {
-                                    // Just use the current time if no date is specified in the header data
-                                    messageDate = new Date();
-                                }
-
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onMessage(message, messageDate, endpoint, RespokeSignalingChannel.this);
-                                }
-                            } catch (JSONException e) {
-                                Log.debug(TAG + "Error parsing received event");
-                            }
-                        }
-                    }
-                    case "signal": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                routeSignal(eachEvent);
-                            } catch (JSONException e) {
-                                Log.debug(TAG + "Error parsing received event");
-                            }
-                        }
-                    }
-
-                    case "pubsub": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                String message = eachEvent.getString("message");
-                                JSONObject header = eachEvent.getJSONObject("header");
-                                String endpointID = header.getString("from");
-                                String groupID = header.getString("channel");
-                                Date messageDate;
-
-                                if (!header.isNull("timestamp")) {
-                                    messageDate = new Date(header.getLong("timestamp"));
-                                } else {
-                                    // Just use the current time if no date is specified in the header data
-                                    messageDate = new Date();
-                                }
-
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onGroupMessage(message, groupID, endpointID, RespokeSignalingChannel.this, messageDate);
-                                }
-                            } catch (JSONException e) {
-                                Log.debug(TAG+ "Error parsing received event");
-                            }
-                        }
-                    }
-                    case "presence": {
-                        for (int ii = 0; ii < arguments.length(); ii++) {
-                            try {
-                                JSONObject eachEvent = arguments.getJSONObject(ii);
-                                Object type = eachEvent.getString("type");
-                                JSONObject header = eachEvent.getJSONObject("header");
-                                String endpointID = header.getString("from");
-                                String connectionID = header.getString("fromConnection");
-
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onPresence(type, connectionID, endpointID, RespokeSignalingChannel.this);
-                                }
-                            } catch (JSONException e) {
-                                Log.debug(TAG+ "Error parsing received event");
-                            }
-                        }
-                    }
-                }
-/*
-                final SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
-
-                final String lastKnownPushTokenID = prefs.getString(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
-*/
-                JSONObject data = new JSONObject();
-                String lastKnownPushTokenID = null;
-
-                if ((null != lastKnownPushTokenID) && (!lastKnownPushTokenID.equals(
-                        "notAvailable"))) {
+     Listener listener = listenerReference.get();
+     if (null != listener) {
+     listener.onError(socketIOException.getMessage(), RespokeSignalingChannel.this);
+     }
+     }
+     */
+    public void onMessage(JSONObject jo) {
+        String event = jo.getString("event");
+        JSONArray arguments = jo.getJSONArray("detail");
+        switch (event) {
+            case "join": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
                     try {
-                        data.put("pushTokenId", lastKnownPushTokenID);
-                    } catch (JSONException e) {
-                        Log.debug( "Invalid JSON format for token");
-                    }
-                } else {
-                    data = null;
-                }
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        String endpoint = eachEvent.getString("endpointId");
+                        String connection = eachEvent.getString("connectionId");
+                        JSONObject header = eachEvent.getJSONObject("header");
+                        String groupID = header.getString("channel");
 
-                // Once the socket is connected, perform a post to get the connection and endpoint IDs for this client
-                sendRESTMessage(
-                        "post", "/v1/connections", data, new RESTListener() {
-                            @Override
-                            public void onSuccess(Object response
-                            ) {
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    if (response instanceof JSONObject) {
-                                        try {
-                                            JSONObject responseJSON = (JSONObject) response;
-                                            String endpointID = responseJSON.getString("endpointId");
-                                            connectionID = responseJSON.getString("id");
-
-                                            listener.onConnect(RespokeSignalingChannel.this, endpointID, connectionID);
-                                        } catch (JSONException e) {
-                                            listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
-                                        }
-                                    } else {
-                                        listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
-                                    }
-                                }
-                            }
-
-                            @Override
-                            public void onError(String errorMessage
-                            ) {
- /*
-                                if ((null != lastKnownPushTokenID) && !lastKnownPushTokenID.equals("notAvailable")) {
-                                    SharedPreferences.Editor editor = prefs.edit();
-                                    editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN);
-                                    editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID);
-                                    editor.commit();
-                                }
-*/
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onError(errorMessage, RespokeSignalingChannel.this);
-                                }
-                            }
-
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onJoinGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
                         }
-                );
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
             }
 
-            @Override
-            public void onDisconnect() {
-                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            case "leave": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
+                    try {
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        String endpoint = eachEvent.getString("endpointId");
+                        String connection = eachEvent.getString("connectionId");
+                        JSONObject header = eachEvent.getJSONObject("header");
+                        String groupID = header.getString("channel");
+
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onLeaveGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
+                        }
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
+            }
+            case "message": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
+                    try {
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        String message = eachEvent.getString("body");
+                        JSONObject header = eachEvent.getJSONObject("header");
+                        String endpoint = header.getString("from");
+                        Date messageDate;
+
+                        if (!header.isNull("timestamp")) {
+                            messageDate = new Date(header.getLong("timestamp"));
+                        } else {
+                            // Just use the current time if no date is specified in the header data
+                            messageDate = new Date();
+                        }
+
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onMessage(message, messageDate, endpoint, RespokeSignalingChannel.this);
+                        }
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
+            }
+            case "signal": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
+                    try {
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        //routeSignal(eachEvent);
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
             }
 
-            @Override
-            public void onMessage(String string, IOAcknowledge ioa) {
-                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
-            }
+            case "pubsub": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
+                    try {
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        String message = eachEvent.getString("message");
+                        JSONObject header = eachEvent.getJSONObject("header");
+                        String endpointID = header.getString("from");
+                        String groupID = header.getString("channel");
+                        Date messageDate;
 
-            @Override
-            public void onMessage(JSONObject jsono, IOAcknowledge ioa) {
-                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+                        if (!header.isNull("timestamp")) {
+                            messageDate = new Date(header.getLong("timestamp"));
+                        } else {
+                            // Just use the current time if no date is specified in the header data
+                            messageDate = new Date();
+                        }
+
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onGroupMessage(message, groupID, endpointID, RespokeSignalingChannel.this, messageDate);
+                        }
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
+            }
+            case "presence": {
+                for (int ii = 0; ii < arguments.length(); ii++) {
+                    try {
+                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        Object type = eachEvent.getString("type");
+                        JSONObject header = eachEvent.getJSONObject("header");
+                        String endpointID = header.getString("from");
+                        String connectionID = header.getString("fromConnection");
+
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onPresence(type, connectionID, endpointID, RespokeSignalingChannel.this);
+                        }
+                    } catch (JSONException e) {
+                        Log.debug(TAG + "Error parsing received event");
+                    }
+                }
             }
         }
-        );
+        /*
+         final SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
+
+         final String lastKnownPushTokenID = prefs.getString(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
+         */
+        JSONObject data = new JSONObject();
+        String lastKnownPushTokenID = null;
+
+        if ((null != lastKnownPushTokenID) && (!lastKnownPushTokenID.equals(
+                "notAvailable"))) {
+            try {
+                data.put("pushTokenId", lastKnownPushTokenID);
+            } catch (JSONException e) {
+                Log.debug("Invalid JSON format for token");
+            }
+        } else {
+            data = null;
+        }
+
+        // Once the socket is connected, perform a post to get the connection and endpoint IDs for this client
+        sendRESTMessage(
+                "post", "/v1/connections", data, new RESTListener() {
+                    @Override
+                    public void onSuccess(Object response
+                    ) {
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            if (response instanceof JSONObject) {
+                                try {
+                                    JSONObject responseJSON = (JSONObject) response;
+                                    String endpointID = responseJSON.getString("endpointId");
+                                    connectionID = responseJSON.getString("id");
+
+                                    listener.onConnect(RespokeSignalingChannel.this, endpointID, connectionID);
+                                } catch (JSONException e) {
+                                    listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
+                                }
+                            } else {
+                                listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
+                            }
+                        }
+                    }
+
+                    @Override
+                    public void onError(String errorMessage
+                    ) {
+                        /*
+                         if ((null != lastKnownPushTokenID) && !lastKnownPushTokenID.equals("notAvailable")) {
+                         SharedPreferences.Editor editor = prefs.edit();
+                         editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN);
+                         editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID);
+                         editor.commit();
+                         }
+                         */
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onError(errorMessage, RespokeSignalingChannel.this);
+                        }
+                    }
+
+                });
     }
 
     public void disconnect() {
         workerThread.cancelAllTasks();
 
-        if (null != client) {
-            client.disconnect();
+        if (null != session) {
+            try {
+                session.close();
+            } catch (IOException ex) {
+                Log.error("session shutdown " + ex.getMessage());
+            }
         }
     }
 
@@ -582,10 +596,14 @@ public class RespokeSignalingChannel {
             public void run() {
                 if (connected) {
                     final CountDownLatch asyncTaskSignal = new CountDownLatch(1);
-                    
-                    client.emit(httpMethod, array, new IOAcknowledge() {
+                    RemoteEndpoint.Async r = session.getAsyncRemote();
+                    r.sendObject(r, new SendHandler() {
                         @Override
-                        public void ack(Object... os){
+                        public void onResult(SendResult sr) {
+                            Log.debug("sendresult was " + sr);
+                        }
+
+                        public void sanitClause(String os) {
                             JSONArray arguments = new JSONArray(os);
                             // There should only ever be one element in this array. Anything else is ignored for the time being.
                             if ((arguments != null) && (arguments.length() > 0)) {
@@ -658,7 +676,7 @@ public class RespokeSignalingChannel {
 
                                     if (rateLimitErrorPresent) {
                                         if (attempt < 3) {
-                                            Log.debug(TAG+ "Performing rate-limited retry " + attempt + 1);
+                                            Log.debug(TAG + "Performing rate-limited retry " + attempt + 1);
                                             sendEvent(httpMethod, array, attempt + 1, completionListener, rateLimitDelay);
                                         } else {
                                             completionListener.onError("API rate limit was exceeded");
@@ -680,8 +698,6 @@ public class RespokeSignalingChannel {
                             // Signal that processing is complete and the next task in the worker thread may proceed
                             asyncTaskSignal.countDown();
                         }
-
-
                     });
 
                     try {
@@ -744,7 +760,7 @@ public class RespokeSignalingChannel {
                 }
 
                 if ((null != sessionID) && (null != signalType) && (null != target)) {
-                    Log.debug(TAG+ "Received signal " + signalType);
+                    Log.debug(TAG + "Received signal " + signalType);
                     boolean isDirectConnection = target.equals("directConnection");
 
                     Listener listener = listenerReference.get();
@@ -763,11 +779,11 @@ public class RespokeSignalingChannel {
                                         if (toConnection.equals(connectionID)) {
                                             call.connectedReceived();
                                         } else {
-                                            Log.debug(TAG+"Another device answered, hanging up.");
+                                            Log.debug(TAG + "Another device answered, hanging up.");
                                             call.hangupReceived();
                                         }
                                     } else {
-                                        Log.debug(TAG+"Unable to find out which endpoint won the call, hanging up");
+                                        Log.debug(TAG + "Unable to find out which endpoint won the call, hanging up");
                                         call.hangupReceived();
                                     }
                                 } else if (signalType.equals("iceCandidates")) {
@@ -793,19 +809,19 @@ public class RespokeSignalingChannel {
                                         listener.onIncomingCall(sdp, sessionID, fromConnection, from, timestamp, RespokeSignalingChannel.this);
                                     }
                                 } else {
-                                    Log.debug(TAG+"Error: Offer missing sdp");
+                                    Log.debug(TAG + "Error: Offer missing sdp");
                                 }
                             }
                         }
                     }
                 } else {
-                    Log.debug(TAG+"Error: Could not parse signal data");
+                    Log.debug(TAG + "Error: Could not parse signal data");
                 }
             } else {
-                Log.debug(TAG+"Error: signal missing header data");
+                Log.debug(TAG + "Error: signal missing header data");
             }
         } catch (JSONException e) {
-            Log.debug(TAG+"Unable to parse received signal");
+            Log.debug(TAG + "Unable to parse received signal");
         }
     }
 
