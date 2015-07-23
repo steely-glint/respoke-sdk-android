@@ -10,11 +10,8 @@
 
 package com.digium.respokesdk;
 
-import android.content.Context;
-import android.content.SharedPreferences;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
+
+import com.phono.srtplight.Log;
 
 import com.digium.respokesdk.RestAPI.APIDoOpen;
 import com.digium.respokesdk.RestAPI.APIGetToken;
@@ -43,17 +40,14 @@ import java.util.Iterator;
  */
 public class RespokeClient implements RespokeSignalingChannel.Listener {
 
-    private static final String TAG = "RespokeClient";
+    protected static final String TAG = "RespokeClient: ";
     private static final int RECONNECT_INTERVAL = 500;  ///< The exponential step interval between automatic reconnect attempts, in milliseconds
-
-    public static final String PROPERTY_LAST_VALID_PUSH_TOKEN = "pushToken";
-    public static final String PROPERTY_LAST_VALID_PUSH_TOKEN_ID = "pushTokenServiceID";
 
     private WeakReference<Listener> listenerReference;
     private WeakReference<ResolvePresenceListener> resolveListenerReference;
     private String localEndpointID;  ///< The local endpoint ID
-    private String localConnectionID; ///< The local connection ID
-    private RespokeSignalingChannel signalingChannel;  ///< The signaling channel to use
+    protected String localConnectionID; ///< The local connection ID
+    protected RespokeSignalingChannel signalingChannel;  ///< The signaling channel to use
     private ArrayList<RespokeCall> calls;  ///< An array of the active calls
     private HashMap<String, RespokeGroup> groups;  ///< An array of the groups this client is a member of
     private ArrayList<RespokeEndpoint> knownEndpoints;  ///< An array of the known endpoints
@@ -62,13 +56,15 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
     private boolean reconnect;  ///< Indicates if the client should automatically reconnect if the web socket disconnects
     private int reconnectCount;  ///< A count of how many times reconnection has been attempted
     private boolean connectionInProgress;  ///< Indicates if the client is in the middle of attempting to connect
-    private Context appContext;  ///< The application context
-    private String pushServiceID; ///< The push service ID
     private ArrayList<String> presenceRegistrationQueue; ///< An array of endpoints that need to be registered for presence updates
     private HashMap<String, Boolean> presenceRegistered; ///< A Hash of all the endpoint IDs that have already been registered for presence updates
     private boolean registrationTaskWaiting; ///< A flag to indicate that a task is scheduled to begin presence registration
 
     public String baseURL = APITransaction.RESPOKE_BASE_URL;  ///< The base url of the Respoke service to use
+
+    private RespokeCall newRespokeCall(RespokeSignalingChannel signalingChannel, JSONObject sdp, String sessionID, String connectionID, RespokeEndpoint endpoint, boolean b, Date timestamp) {
+        return new RespokeCall( signalingChannel,  sdp,  sessionID,  connectionID,  endpoint,  b,  timestamp) {};
+    }
 
 
     /**
@@ -198,22 +194,24 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
             return null;
         }
     }
+    
+    void queueRunnable(Runnable r){
+        r.run();
+    }
 
-
-    public void connect(String endpointID, String appID, boolean shouldReconnect, final Object initialPresence, Context context, final ConnectCompletionListener completionListener) {
+    public void connect(String endpointID, String appID, boolean shouldReconnect, final Object initialPresence, final ConnectCompletionListener completionListener) {
         if ((endpointID != null) && (appID != null) && (endpointID.length() > 0) && (appID.length() > 0)) {
             connectionInProgress = true;
             reconnect = shouldReconnect;
             applicationID = appID;
-            appContext = context;
 
-            APIGetToken request = new APIGetToken(context, baseURL) {
+            APIGetToken request = new APIGetToken(baseURL) {
                 @Override
                 public void transactionComplete() {
                     super.transactionComplete();
 
                     if (success) {
-                        connect(this.token, initialPresence, appContext, new ConnectCompletionListener() {
+                        connect(this.token, initialPresence, new ConnectCompletionListener() {
                             @Override
                             public void onError(final String errorMessage) {
                                 connectionInProgress = false;
@@ -238,12 +236,11 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
     }
 
 
-    public void connect(String tokenID, final Object initialPresence, Context context, final ConnectCompletionListener completionListener) {
+    public void connect(String tokenID, final Object initialPresence, final ConnectCompletionListener completionListener) {
         if ((tokenID != null) && (tokenID.length() > 0)) {
             connectionInProgress = true;
-            appContext = context;
 
-            APIDoOpen request = new APIDoOpen(context, baseURL) {
+            APIDoOpen request = new APIDoOpen( baseURL) {
                 @Override
                 public void transactionComplete() {
                     super.transactionComplete();
@@ -252,7 +249,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
                         // Remember the presence value to set once connected
                         presence = initialPresence;
 
-                        signalingChannel = new RespokeSignalingChannel(appToken, RespokeClient.this, baseURL, appContext);
+                        signalingChannel = new RespokeSignalingChannel(appToken, RespokeClient.this, baseURL);
                         signalingChannel.authenticate();
                     } else {
                         connectionInProgress = false;
@@ -271,7 +268,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
 
 
     private void postConnectError(final ConnectCompletionListener completionListener, final String errorMessage) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != completionListener) {
@@ -316,7 +313,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
                                 newGroupList.add(newGroup);
                             }
 
-                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            queueRunnable(new Runnable() {
                                 @Override
                                 public void run() {
                                     if (null != completionListener) {
@@ -344,7 +341,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
 
 
     private void postJoinGroupMembersError(final JoinGroupCompletionListener completionListener, final String errorMessage) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != completionListener) {
@@ -488,12 +485,12 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
                 // The client app must have initiated a connection manually during the timeout period. Try again later
                 performReconnect();
             } else {
-                Log.d(TAG, "Trying to reconnect...");
-                connect(localEndpointID, applicationID, reconnect, presence, appContext, new ConnectCompletionListener() {
+                Log.debug(TAG+"Trying to reconnect...");
+                connect(localEndpointID, applicationID, reconnect, presence, new ConnectCompletionListener() {
                     @Override
                     public void onError(final String errorMessage) {
                         // A REST API call failed. Socket errors are handled in the onError callback
-                        new Handler(Looper.getMainLooper()).post(new Runnable() {
+                        queueRunnable(new Runnable() {
                             @Override
                             public void run() {
                                 Listener listener = listenerReference.get();
@@ -531,7 +528,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
 
             if (shouldSpawnRegistrationTask) {
                 // Schedule a Runnable to register presence on the next context switch, which should allow multiple subsequent calls to queuePresenceRegistration to get batched into a single socket transaction for efficiency
-                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                queueRunnable(new Runnable() {
                     @Override
                     public void run() {
                         final HashMap<String, Boolean> endpointIDMap = new HashMap<String, Boolean>();
@@ -600,7 +597,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
 
                                 @Override
                                 public void onError(final String errorMessage) {
-                                    Log.d(TAG, "Error registering presence: " + errorMessage);
+                                    Log.debug(TAG+"Error registering presence: " + errorMessage);
                                 }
                             });
                         }
@@ -635,7 +632,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
             }
         });
 
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();
@@ -658,7 +655,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
         presenceRegistered.clear();
         registrationTaskWaiting = false;
 
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();
@@ -680,9 +677,9 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
         RespokeEndpoint endpoint = getEndpoint(endpointID, false);
 
         if (null != endpoint) {
-            final RespokeCall call = new RespokeCall(signalingChannel, sdp, sessionID, connectionID, endpoint, false, timestamp);
+            final RespokeCall call = newRespokeCall(signalingChannel, sdp, sessionID, connectionID, endpoint, false, timestamp);
 
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
+            queueRunnable(new Runnable() {
                 @Override
                 public void run() {
                     Listener listener = listenerReference.get();
@@ -692,7 +689,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
                 }
             });
         } else {
-            Log.d(TAG, "Error: Could not create Endpoint for incoming call");
+            Log.debug(TAG+ "Error: Could not create Endpoint for incoming call");
         }
     }
 
@@ -701,15 +698,15 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
         RespokeEndpoint endpoint = getEndpoint(endpointID, false);
 
         if (null != endpoint) {
-            final RespokeCall call = new RespokeCall(signalingChannel, sdp, sessionID, connectionID, endpoint, true, timestamp);
+            final RespokeCall call = newRespokeCall(signalingChannel, sdp, sessionID, connectionID, endpoint, true, timestamp);
         } else {
-            Log.d(TAG, "Error: Could not create Endpoint for incoming direct connection");
+            Log.debug(TAG+ "Error: Could not create Endpoint for incoming direct connection");
         }
     }
 
 
     public void onError(final String errorMessage, RespokeSignalingChannel sender) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();
@@ -771,7 +768,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
             endpoint.didReceiveMessage(message, timestamp);
 
             // Notify the client listener of the message
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
+            queueRunnable(new Runnable() {
                 @Override
                 public void run() {
                     if (null != listenerReference) {
@@ -796,7 +793,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
             group.didReceiveMessage(message, endpoint, timestamp);
 
             // Notify the client listener of the group message
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
+            queueRunnable(new Runnable() {
                 @Override
                 public void run() {
                     if (null != listenerReference) {
@@ -848,7 +845,7 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
 
 
     public void directConnectionAvailable(final RespokeDirectConnection directConnection, final RespokeEndpoint endpoint) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != listenerReference) {
@@ -859,105 +856,6 @@ public class RespokeClient implements RespokeSignalingChannel.Listener {
                 }
             }
         });
-    }
-
-
-    public void registerPushServicesWithToken(final String token) {
-        String httpURI;
-        String httpMethod;
-
-        JSONObject data = new JSONObject();
-        try {
-            data.put("token", token);
-            data.put("service", "google");
-
-            SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
-
-            if (null != prefs) {
-                String lastKnownPushToken = prefs.getString(PROPERTY_LAST_VALID_PUSH_TOKEN, "notAvailable");
-                String lastKnownPushTokenID = prefs.getString(PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
-
-                if ((null == lastKnownPushToken) || (lastKnownPushToken.equals("notAvailable"))) {
-                    httpURI = String.format("/v1/connections/%s/push-token", localConnectionID);
-                    httpMethod = "post";
-                    createOrUpdatePushServiceToken(token, httpURI, httpMethod, data, prefs);
-                } else if (!lastKnownPushToken.equals("notAvailable") && !lastKnownPushToken.equals(token)) {
-                    httpURI = String.format("/v1/connections/%s/push-token/%s", localConnectionID, lastKnownPushTokenID);
-                    httpMethod = "put";
-                    createOrUpdatePushServiceToken(token, httpURI, httpMethod, data, prefs);
-                }
-            }
-        } catch(JSONException e) {
-            Log.d("", "Invalid JSON format for token");
-        }
-    }
-
-
-    private void createOrUpdatePushServiceToken(final String token, String httpURI, String httpMethod, JSONObject data, final SharedPreferences prefs) {
-        signalingChannel.sendRESTMessage(httpMethod, httpURI, data, new RespokeSignalingChannel.RESTListener() {
-            @Override
-            public void onSuccess(Object response) {
-                if (response instanceof JSONObject) {
-                    try {
-                        JSONObject responseJSON = (JSONObject) response;
-                        pushServiceID = responseJSON.getString("id");
-
-                        SharedPreferences.Editor editor = prefs.edit();
-                        editor.putString(PROPERTY_LAST_VALID_PUSH_TOKEN, token);
-                        editor.putString(PROPERTY_LAST_VALID_PUSH_TOKEN_ID, pushServiceID);
-                        editor.apply();
-                    } catch (JSONException e) {
-                        Log.d(TAG, "Unexpected response from server while registering push service token");
-                    }
-                } else {
-                    Log.d(TAG, "Unexpected response from server while registering push service token");
-                }
-            }
-
-            @Override
-            public void onError(String errorMessage) {
-                Log.d(TAG, "Error registering push service token: " + errorMessage);
-            }
-        });
-    }
-
-
-    public void unregisterFromPushServices(final Respoke.TaskCompletionListener completionListener) {
-        if (isConnected()) {
-            SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
-
-            if (null != prefs) {
-                String lastKnownPushTokenID = prefs.getString(PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
-
-                if ((null != lastKnownPushTokenID) && !lastKnownPushTokenID.equals("notAvailable")) {
-                    // A push token has previously been registered successfully
-                    String httpURI = String.format("/v1/connections/%s/push-token/%s", localConnectionID, lastKnownPushTokenID);
-                    signalingChannel.sendRESTMessage("delete", httpURI, null, new RespokeSignalingChannel.RESTListener() {
-                        @Override
-                        public void onSuccess(Object response) {
-                            // Remove the push token ID from shared memory so that push may be registered again in the future
-                            SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
-                            SharedPreferences.Editor editor = prefs.edit();
-                            editor.remove(PROPERTY_LAST_VALID_PUSH_TOKEN_ID);
-                            editor.apply();
-
-                            Respoke.postTaskSuccess(completionListener);
-                        }
-
-                        @Override
-                        public void onError(String errorMessage) {
-                            Respoke.postTaskError(completionListener, "Error unregistering push service token: " + errorMessage);
-                        }
-                    });
-                } else {
-                    Respoke.postTaskSuccess(completionListener);
-                }
-            } else {
-                Respoke.postTaskError(completionListener, "Unable to access shared preferences to look for push token");
-            }
-        } else {
-            Respoke.postTaskError(completionListener, "Can't complete request when not connected. Please reconnect!");
-        }
     }
 
 }

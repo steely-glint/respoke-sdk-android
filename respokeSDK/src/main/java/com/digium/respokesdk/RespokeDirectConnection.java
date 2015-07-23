@@ -1,23 +1,17 @@
 /**
- * Copyright 2015, Digium, Inc.
- * All rights reserved.
+ * Copyright 2015, Digium, Inc. All rights reserved.
  *
- * This source code is licensed under The MIT License found in the
- * LICENSE file in the root directory of this source tree.
+ * This source code is licensed under The MIT License found in the LICENSE file
+ * in the root directory of this source tree.
  *
- * For all details and documentation:  https://www.respoke.io
+ * For all details and documentation: https://www.respoke.io
  */
-
 package com.digium.respokesdk;
 
-import android.content.Context;
-import android.os.Handler;
-import android.os.Looper;
-
+import com.ipseorama.webrtc.PeerConnection;
+import com.ipseorama.webrtc.DataChannel;
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.webrtc.DataChannel;
-import org.webrtc.PeerConnection;
 
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.WeakReference;
@@ -30,54 +24,52 @@ import java.nio.charset.CharsetDecoder;
 /**
  * A direct connection via RTCDataChannel, including state and path negotation.
  */
-public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer {
+public class RespokeDirectConnection {
 
     private WeakReference<Listener> listenerReference;
     private WeakReference<RespokeCall> callReference;
     private DataChannel dataChannel;
 
-
     /**
-     *  A listener interface to notify the receiver of events occurring with the direct connection
+     * A listener interface to notify the receiver of events occurring with the
+     * direct connection
      */
     public interface Listener {
 
         /**
-         *  The direct connection setup has begun. This does NOT mean it's ready to send messages yet. Listen to
-         *  onOpen for that notification.
+         * The direct connection setup has begun. This does NOT mean it's ready
+         * to send messages yet. Listen to onOpen for that notification.
          *
-         *  @param sender  The direct connection for which the event occurred
+         * @param sender The direct connection for which the event occurred
          */
         public void onStart(RespokeDirectConnection sender);
 
         /**
-         *  Called when the direct connection is opened.
+         * Called when the direct connection is opened.
          *
-         *  @param sender  The direct connection for which the event occurred
+         * @param sender The direct connection for which the event occurred
          */
         public void onOpen(RespokeDirectConnection sender);
 
         /**
-         *  Called when the direct connection is closed.
+         * Called when the direct connection is closed.
          *
-         *  @param sender  The direct connection for which the event occurred
+         * @param sender The direct connection for which the event occurred
          */
         public void onClose(RespokeDirectConnection sender);
 
         /**
-         *  Called when a message is received over the direct connection.
+         * Called when a message is received over the direct connection.
          *
-         *  @param sender  The direct connection for which the event occurred
+         * @param sender The direct connection for which the event occurred
          */
         public void onMessage(String message, RespokeDirectConnection sender);
 
     }
 
-
     public RespokeDirectConnection(RespokeCall call) {
         callReference = new WeakReference<RespokeCall>(call);
     }
-
 
     public void setListener(Listener listener) {
         if (null != listener) {
@@ -87,21 +79,18 @@ public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer 
         }
     }
 
-
-    public void accept(Context context) {
+    public void accept() {
         if (null != callReference) {
             RespokeCall call = callReference.get();
             if (null != call) {
-                call.directConnectionDidAccept(context);
+                call.directConnectionDidAccept();
             }
         }
     }
 
-
     public boolean isActive() {
         return ((null != dataChannel) && (dataChannel.state() == DataChannel.State.OPEN));
     }
-
 
     public RespokeCall getCall() {
         if (null != callReference) {
@@ -111,7 +100,6 @@ public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer 
         }
 
     }
-
 
     public void sendMessage(String message, final Respoke.TaskCompletionListener completionListener) {
         if (isActive()) {
@@ -137,7 +125,6 @@ public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer 
         }
     }
 
-
     public void createDataChannel() {
         if (null != callReference) {
             RespokeCall call = callReference.get();
@@ -149,109 +136,93 @@ public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer 
         }
     }
 
-
     public void peerConnectionDidOpenDataChannel(DataChannel newDataChannel) {
         if (null != dataChannel) {
             // Replacing the previous connection, so disable observer messages from the old instance
             dataChannel.unregisterObserver();
         } else {
-            new Handler(Looper.getMainLooper()).post(new Runnable() {
-                public void run() {
-                    if (null != listenerReference) {
-                        Listener listener = listenerReference.get();
-                        if (null != listener) {
-                            listener.onStart(RespokeDirectConnection.this);
-                        }
-                    }
+
+            if (null != listenerReference) {
+                Listener listener = listenerReference.get();
+                if (null != listener) {
+                    listener.onStart(RespokeDirectConnection.this);
                 }
-            });
+            }
         }
 
         dataChannel = newDataChannel;
         newDataChannel.registerObserver(this);
     }
 
-
     // org.webrtc.DataChannel.Observer methods
-
-
     public void onStateChange() {
         switch (dataChannel.state()) {
             case CONNECTING:
                 break;
 
             case OPEN: {
-                    if (null != callReference) {
-                        RespokeCall call = callReference.get();
-                        if (null != call) {
-                            call.directConnectionDidOpen(this);
-                        }
+                if (null != callReference) {
+                    RespokeCall call = callReference.get();
+                    if (null != call) {
+                        call.directConnectionDidOpen(this);
                     }
-
-                new Handler(Looper.getMainLooper()).post(new Runnable() {
-                    public void run() {
-                        if (null != listenerReference) {
-                            Listener listener = listenerReference.get();
-                            if (null != listener) {
-                                listener.onOpen(RespokeDirectConnection.this);
-                            }
-                        }
-                    }
-                });
                 }
-                break;
+
+                if (null != listenerReference) {
+                    Listener listener = listenerReference.get();
+                    if (null != listener) {
+                        listener.onOpen(RespokeDirectConnection.this);
+                    }
+                }
+
+            }
+            break;
 
             case CLOSING:
                 break;
 
             case CLOSED: {
-                    if (null != callReference) {
-                        RespokeCall call = callReference.get();
-                        if (null != call) {
-                            call.directConnectionDidClose(this);
-                        }
+                if (null != callReference) {
+                    RespokeCall call = callReference.get();
+                    if (null != call) {
+                        call.directConnectionDidClose(this);
                     }
-
-                    new Handler(Looper.getMainLooper()).post(new Runnable() {
-                        public void run() {
-                            if (null != listenerReference) {
-                                Listener listener = listenerReference.get();
-                                if (null != listener) {
-                                    listener.onClose(RespokeDirectConnection.this);
-                                }
-                            }
-                        }
-                    });
                 }
-                break;
+
+                if (null != listenerReference) {
+                    Listener listener = listenerReference.get();
+                    if (null != listener) {
+                        listener.onClose(RespokeDirectConnection.this);
+                    }
+                }
+
+            }
+            break;
         }
     }
 
-
-    public void onMessage(org.webrtc.DataChannel.Buffer buffer) {
+    public void onMessage(DataChannel.Buffer buffer) {
         if (buffer.binary) {
             // TODO
         } else {
             Charset charset = Charset.forName("UTF-8");
             CharsetDecoder decoder = charset.newDecoder();
             try {
-                String message = decoder.decode( buffer.data ).toString();
+                String message = decoder.decode(buffer.data).toString();
 
                 try {
                     JSONObject jsonMessage = new JSONObject(message);
                     final String messageText = jsonMessage.getString("message");
 
                     if (null != messageText) {
-                        new Handler(Looper.getMainLooper()).post(new Runnable() {
-                            public void run() {
-                                if (null != listenerReference) {
-                                    Listener listener = listenerReference.get();
-                                    if (null != listener) {
-                                        listener.onMessage(messageText, RespokeDirectConnection.this);
-                                    }
-                                }
+
+                        if (null != listenerReference) {
+                            Listener listener = listenerReference.get();
+                            if (null != listener) {
+                                listener.onMessage(messageText, RespokeDirectConnection.this);
                             }
-                        });
+                        }
+
                     }
                 } catch (JSONException e) {
                     // If it is not valid json, ignore the message
@@ -261,6 +232,5 @@ public class RespokeDirectConnection implements org.webrtc.DataChannel.Observer 
             }
         }
     }
-
 
 }

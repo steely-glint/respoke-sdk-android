@@ -1,216 +1,212 @@
 /**
- * Copyright 2015, Digium, Inc.
- * All rights reserved.
+ * Copyright 2015, Digium, Inc. All rights reserved.
  *
- * This source code is licensed under The MIT License found in the
- * LICENSE file in the root directory of this source tree.
+ * This source code is licensed under The MIT License found in the LICENSE file
+ * in the root directory of this source tree.
  *
- * For all details and documentation:  https://www.respoke.io
+ * For all details and documentation: https://www.respoke.io
  */
-
 package com.digium.respokesdk;
-
-import android.content.Context;
-import android.content.SharedPreferences;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import com.koushikdutta.async.http.AsyncHttpClient;
-import com.koushikdutta.async.http.socketio.Acknowledge;
-import com.koushikdutta.async.http.socketio.ConnectCallback;
-import com.koushikdutta.async.http.socketio.DisconnectCallback;
-import com.koushikdutta.async.http.socketio.ErrorCallback;
-import com.koushikdutta.async.http.socketio.EventCallback;
-import com.koushikdutta.async.http.socketio.SocketIOClient;
+import io.socket.*;
 
 import com.digium.respokesdk.RestAPI.APITransaction;
+import com.phono.srtplight.Log;
 
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.WeakReference;
+import java.net.MalformedURLException;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.net.ssl.SSLContext;
 
 /**
- *  The purpose of this class is to make a method call for each API call
- *  to the backend REST interface.  This class takes care of App authentication, websocket connection,
- *  Endpoint authentication, and all App interactions thereafter.
+ * The purpose of this class is to make a method call for each API call to the
+ * backend REST interface. This class takes care of App authentication,
+ * websocket connection, Endpoint authentication, and all App interactions
+ * thereafter.
  */
 public class RespokeSignalingChannel {
 
-    private static final String TAG = "RespokeSignalingChannel";
+    private static final String TAG = "RespokeSignalingChannel: ";
     private static final String RESPOKE_SOCKETIO_PORT = "443";
     private static final Integer REST_TASK_TIMEOUT = 30;
 
     public boolean connected;
     private WeakReference<Listener> listenerReference;
     private String appToken;
-    private SocketIOClient client;
+    private SocketIO client;
     private String connectionID;
     private String baseURL;
-    private Context appContext;
     private RespokeWorkerThread workerThread;
 
-
     /**
-     *  A delegate protocol to notify the receiver of events occurring with the connection status of the signaling channel
+     * A delegate protocol to notify the receiver of events occurring with the
+     * connection status of the signaling channel
      */
     public interface Listener {
 
         /**
-         *  Receive a notification from the signaling channel that it has connected to the cloud infrastructure
+         * Receive a notification from the signaling channel that it has
+         * connected to the cloud infrastructure
          *
-         *  @param sender      The signaling channel that triggered the event
-         *  @param endpointID  The endpointID for this connection, as reported by the server
+         * @param sender The signaling channel that triggered the event
+         * @param endpointID The endpointID for this connection, as reported by
+         * the server
          */
         void onConnect(RespokeSignalingChannel sender, String endpointID, String connectionID);
 
-
         /**
-         *  Receive a notification from the signaling channel that it has disconnected to the cloud infrastructure
+         * Receive a notification from the signaling channel that it has
+         * disconnected to the cloud infrastructure
          *
-         *  @param sender The signaling channel that triggered the event
+         * @param sender The signaling channel that triggered the event
          */
         void onDisconnect(RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that a remote endpoint is attempting to start a call
+         * Receive a notification from the signaling channel that a remote
+         * endpoint is attempting to start a call
          *
-         *  @param sdp           The SDP data for the call
-         *  @param sessionID     The session ID of the call
-         *  @param connectionID  The connectionID that is calling
-         *  @param endpointID    The endpointID that is calling
-         *  @param timestamp     The timestamp when the call was initiated
-         *  @param sender        The signaling channel that triggered the event
+         * @param sdp The SDP data for the call
+         * @param sessionID The session ID of the call
+         * @param connectionID The connectionID that is calling
+         * @param endpointID The endpointID that is calling
+         * @param timestamp The timestamp when the call was initiated
+         * @param sender The signaling channel that triggered the event
          */
         void onIncomingCall(JSONObject sdp, String sessionID, String connectionID, String endpointID, Date timestamp, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that a remote endpoint is attempting to start a direct connection
+         * Receive a notification from the signaling channel that a remote
+         * endpoint is attempting to start a direct connection
          *
-         *  @param sdp           The SDP data for the directConnection
-         *  @param sessionID     The session ID of the directConnection
-         *  @param connectionID  The connectionID that is calling
-         *  @param endpointID    The endpointID that is calling
-         *  @param timestamp     The timestamp when the call was initiated
-         *  @param sender        The signaling channel that triggered the event
+         * @param sdp The SDP data for the directConnection
+         * @param sessionID The session ID of the directConnection
+         * @param connectionID The connectionID that is calling
+         * @param endpointID The endpointID that is calling
+         * @param timestamp The timestamp when the call was initiated
+         * @param sender The signaling channel that triggered the event
          */
         void onIncomingDirectConnection(JSONObject sdp, String sessionID, String connectionID, String endpointID, Date timestamp, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that an error has occurred
+         * Receive a notification from the signaling channel that an error has
+         * occurred
          *
-         *  @param errorMessage  Error message
-         *  @param sender        The signaling channel that triggered the event
+         * @param errorMessage Error message
+         * @param sender The signaling channel that triggered the event
          */
         void onError(String errorMessage, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that an endpoint has joined this group.
+         * Receive a notification from the signaling channel that an endpoint
+         * has joined this group.
          *
-         *  @param groupID      The ID of the group triggering the join message
-         *  @param endpointID   The ID of the endpoint that to which the connection belongs
-         *  @param connectionID The ID of the connection that has joined the group
-         *  @param sender       The signaling channel that triggered the event
+         * @param groupID The ID of the group triggering the join message
+         * @param endpointID The ID of the endpoint that to which the connection
+         * belongs
+         * @param connectionID The ID of the connection that has joined the
+         * group
+         * @param sender The signaling channel that triggered the event
          */
         void onJoinGroup(String groupID, String endpointID, String connectionID, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that an endpoint has left this group.
+         * Receive a notification from the signaling channel that an endpoint
+         * has left this group.
          *
-         *  @param groupID      The ID of the group triggering the leave message
-         *  @param endpointID   The ID of the endpoint that to which the connection belongs
-         *  @param connectionID The ID of the connection that has left the group
-         *  @param sender       The signaling channel that triggered the event
+         * @param groupID The ID of the group triggering the leave message
+         * @param endpointID The ID of the endpoint that to which the connection
+         * belongs
+         * @param connectionID The ID of the connection that has left the group
+         * @param sender The signaling channel that triggered the event
          */
         void onLeaveGroup(String groupID, String endpointID, String connectionID, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that a message has been sent to this group
+         * Receive a notification from the signaling channel that a message has
+         * been sent to this group
          *
-         *  @param message    The body of the message
-         *  @param timestamp  The timestamp of the message
-         *  @param endpointID The ID of the endpoint sending the message
-         *  @param sender     The signaling channel that triggered the event
+         * @param message The body of the message
+         * @param timestamp The timestamp of the message
+         * @param endpointID The ID of the endpoint sending the message
+         * @param sender The signaling channel that triggered the event
          */
         void onMessage(String message, Date timestamp, String endpointID, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification that a group message was received
+         * Receive a notification that a group message was received
          *
-         *  @param message    The body of the message
-         *  @param groupID    The ID of the group to which the message was sent
-         *  @param endpointID The ID of the endpoint that sent the message
-         *  @param sender     The signaling channel that triggered the event
-         *  @param timestamp  The time at which the message was sent
+         * @param message The body of the message
+         * @param groupID The ID of the group to which the message was sent
+         * @param endpointID The ID of the endpoint that sent the message
+         * @param sender The signaling channel that triggered the event
+         * @param timestamp The time at which the message was sent
          */
         void onGroupMessage(String message, String groupID, String endpointID, RespokeSignalingChannel sender, Date timestamp);
 
-
         /**
-         *  Receive a notification that a presence change message was received
+         * Receive a notification that a presence change message was received
          *
-         *  @param presence     The new presence value
-         *  @param connectionID The connection ID whose presence changed
-         *  @param endpointID     The endpoint ID to which the connection belongs
-         *  @param sender       The signaling channel that triggered the event
+         * @param presence The new presence value
+         * @param connectionID The connection ID whose presence changed
+         * @param endpointID The endpoint ID to which the connection belongs
+         * @param sender The signaling channel that triggered the event
          */
         void onPresence(Object presence, String connectionID, String endpointID, RespokeSignalingChannel sender);
 
-
         /**
-         *  Receive a notification from the signaling channel that a call has been created
+         * Receive a notification from the signaling channel that a call has
+         * been created
          *
-         *  @param call The RespokeCall instance that was created
+         * @param call The RespokeCall instance that was created
          */
         void callCreated(RespokeCall call);
 
-
         /**
-         *  Receive a notification from the signaling channel that a call has terminated
+         * Receive a notification from the signaling channel that a call has
+         * terminated
          *
-         *  @param call The RespokeCall instance that was terminated
+         * @param call The RespokeCall instance that was terminated
          */
         void callTerminated(RespokeCall call);
 
-
         /**
-         *  Find a call with the specified session ID
+         * Find a call with the specified session ID
          *
-         *  @param sessionID SessionID to find
+         * @param sessionID SessionID to find
          *
-         *  @return The RespokeCall instance with that sessionID. If not found, will return nil.
+         * @return The RespokeCall instance with that sessionID. If not found,
+         * will return nil.
          */
         RespokeCall callWithID(String sessionID);
 
-
         /**
-         *  This event is fired when the logged-in endpoint is receiving a request to open a direct connection
-         *  to another endpoint.  If the user wishes to allow the direct connection, calling 'accept' on the
-         *  direct connection will allow the connection to be set up.
+         * This event is fired when the logged-in endpoint is receiving a
+         * request to open a direct connection to another endpoint. If the user
+         * wishes to allow the direct connection, calling 'accept' on the direct
+         * connection will allow the connection to be set up.
          *
-         *  @param directConnection The direct connection object
-         *  @param endpoint         The remote endpoint
+         * @param directConnection The direct connection object
+         * @param endpoint The remote endpoint
          */
         void directConnectionAvailable(RespokeDirectConnection directConnection, RespokeEndpoint endpoint);
     }
 
-
     /**
-     * A listener interface to receive a notification that the REST message transmission has completed
+     * A listener interface to receive a notification that the REST message
+     * transmission has completed
      */
     public interface RESTListener {
 
@@ -220,9 +216,9 @@ public class RespokeSignalingChannel {
 
     }
 
-
     /**
-     * A listener interface to receive a notification that this client has been registered to receive presence updates for a specific endpoint
+     * A listener interface to receive a notification that this client has been
+     * registered to receive presence updates for a specific endpoint
      */
     public interface RegisterPresenceListener {
 
@@ -232,77 +228,74 @@ public class RespokeSignalingChannel {
 
     }
 
+    public RespokeSignalingChannel(String token, Listener newListener, String baseURL) {
+        try {
+            appToken = token;
+            this.baseURL = baseURL;
+            listenerReference = new WeakReference<Listener>(newListener);
+            workerThread = new RespokeWorkerThread("RespokeWorkerThread");
+            workerThread.start();
+            workerThread.prepareHandler();
+            SocketIO.setDefaultSSLSocketFactory(SSLContext.getDefault());
+        } catch (NoSuchAlgorithmException ex) {
+            Log.error("Cant set SSL "+ex.toString());
+        }
 
-    public RespokeSignalingChannel(String token, Listener newListener, String baseURL, Context context) {
-        appToken = token;
-        this.baseURL = baseURL;
-        listenerReference = new WeakReference<Listener>(newListener);
-        appContext = context;
-        workerThread = new RespokeWorkerThread("RespokeWorkerThread");
-        workerThread.start();
-        workerThread.prepareHandler();
     }
-
 
     public Listener GetListener() {
         return listenerReference.get();
     }
 
-
-    public void authenticate() {
+    public void authenticate()  {
         String connectURL = baseURL + ":" + RESPOKE_SOCKETIO_PORT + "?__sails_io_sdk_version=0.10.0&app-token=" + appToken;
-
-        SocketIOClient.connect(AsyncHttpClient.getDefaultInstance(), connectURL, new ConnectCallback() {
+        try {
+            client = new SocketIO(connectURL);
+        } catch (MalformedURLException ex) {
+            Log.error(RespokeSignalingChannel.class.getName()+ ex.toString());
+        }
+        client.connect(new IOCallback() {
             @Override
-            public void onConnectCompleted(Exception ex, SocketIOClient newClient) {
-                if (ex != null) {
-                    Listener listener = listenerReference.get();
-                    if (null != listener) {
-                        listener.onError("Unable to connect to Respoke. Please try again", RespokeSignalingChannel.this);
-                    }
+            public void onConnect() {
+                Listener listener = listenerReference.get();
+                if (null != listener) {
+                    listener.onError("Unable to connect to Respoke. Please try again", RespokeSignalingChannel.this);
+                }
+                connected = true;
+            }
 
-                    return;
+            public void onDisconnect(Exception e) {
+                Log.debug(TAG + "Socket disconnected");
+                if (null != e) {
+                    e.printStackTrace();
                 }
 
-                client = newClient;
-                connected = true;
+                if (connected) {
+                    connected = false;
+                    client = null;
+                    workerThread.cancelAllTasks();
 
-                client.setDisconnectCallback(new DisconnectCallback() {
-                    @Override
-                    public void onDisconnect(Exception e) {
-                        Log.d(TAG, "Socket disconnected");
-                        if (null != e) {
-                            e.printStackTrace();
-                        }
-
-                        if (connected) {
-                            connected = false;
-                            client = null;
-                            workerThread.cancelAllTasks();
-
-                            Listener listener = listenerReference.get();
-                            if (null != listener) {
-                                listener.onDisconnect(RespokeSignalingChannel.this);
-                            }
-                        }
+                    Listener listener = listenerReference.get();
+                    if (null != listener) {
+                        listener.onDisconnect(RespokeSignalingChannel.this);
                     }
-                });
+                }
+            }
 
-                client.setErrorCallback(new ErrorCallback() {
-                    @Override
-                    public void onError(String error) {
-                        Log.d(TAG, "Socket error: " + error);
+            @Override
+            public void onError(SocketIOException socketIOException) {
+                Log.debug(TAG + "Socket error: " + socketIOException.getMessage());
 
-                        Listener listener = listenerReference.get();
-                        if (null != listener) {
-                            listener.onError(error, RespokeSignalingChannel.this);
-                        }
-                    }
-                });
+                Listener listener = listenerReference.get();
+                if (null != listener) {
+                    listener.onError(socketIOException.getMessage(), RespokeSignalingChannel.this);
+                }
+            }
 
-                client.on("join", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+            public void on(String event, IOAcknowledge ack, Object... args) {
+                JSONArray arguments = new JSONArray(args);
+                switch (event) {
+                    case "join": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
@@ -316,15 +309,12 @@ public class RespokeSignalingChannel {
                                     listener.onJoinGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
                                 }
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG + "Error parsing received event");
                             }
                         }
                     }
-                });
 
-                client.on("leave", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+                    case "leave": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
@@ -338,15 +328,11 @@ public class RespokeSignalingChannel {
                                     listener.onLeaveGroup(groupID, endpoint, connection, RespokeSignalingChannel.this);
                                 }
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG + "Error parsing received event");
                             }
                         }
                     }
-                });
-
-                client.on("message", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+                    case "message": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
@@ -367,29 +353,22 @@ public class RespokeSignalingChannel {
                                     listener.onMessage(message, messageDate, endpoint, RespokeSignalingChannel.this);
                                 }
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG + "Error parsing received event");
                             }
                         }
                     }
-                });
-
-                client.on("signal", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+                    case "signal": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
                                 routeSignal(eachEvent);
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG + "Error parsing received event");
                             }
                         }
                     }
-                });
 
-                client.on("pubsub", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+                    case "pubsub": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
@@ -411,15 +390,11 @@ public class RespokeSignalingChannel {
                                     listener.onGroupMessage(message, groupID, endpointID, RespokeSignalingChannel.this, messageDate);
                                 }
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG+ "Error parsing received event");
                             }
                         }
                     }
-                });
-
-                client.on("presence", new EventCallback() {
-                    @Override
-                    public void onEvent(JSONArray arguments, Acknowledge acknowledge) {
+                    case "presence": {
                         for (int ii = 0; ii < arguments.length(); ii++) {
                             try {
                                 JSONObject eachEvent = arguments.getJSONObject(ii);
@@ -433,72 +408,92 @@ public class RespokeSignalingChannel {
                                     listener.onPresence(type, connectionID, endpointID, RespokeSignalingChannel.this);
                                 }
                             } catch (JSONException e) {
-                                Log.d(TAG, "Error parsing received event");
+                                Log.debug(TAG+ "Error parsing received event");
                             }
                         }
                     }
-                });
-
+                }
+/*
                 final SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
 
                 final String lastKnownPushTokenID = prefs.getString(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
-
+*/
                 JSONObject data = new JSONObject();
+                String lastKnownPushTokenID = null;
 
-                if ((null != lastKnownPushTokenID) && (!lastKnownPushTokenID.equals("notAvailable"))) {
+                if ((null != lastKnownPushTokenID) && (!lastKnownPushTokenID.equals(
+                        "notAvailable"))) {
                     try {
                         data.put("pushTokenId", lastKnownPushTokenID);
-                    } catch(JSONException e) {
-                        Log.d("", "Invalid JSON format for token");
+                    } catch (JSONException e) {
+                        Log.debug( "Invalid JSON format for token");
                     }
                 } else {
                     data = null;
                 }
 
-
                 // Once the socket is connected, perform a post to get the connection and endpoint IDs for this client
-                sendRESTMessage("post", "/v1/connections", data, new RESTListener() {
-                    @Override
-                    public void onSuccess(Object response) {
-                        Listener listener = listenerReference.get();
-                        if (null != listener) {
-                            if (response instanceof JSONObject) {
-                                try {
-                                    JSONObject responseJSON = (JSONObject) response;
-                                    String endpointID = responseJSON.getString("endpointId");
-                                    connectionID = responseJSON.getString("id");
+                sendRESTMessage(
+                        "post", "/v1/connections", data, new RESTListener() {
+                            @Override
+                            public void onSuccess(Object response
+                            ) {
+                                Listener listener = listenerReference.get();
+                                if (null != listener) {
+                                    if (response instanceof JSONObject) {
+                                        try {
+                                            JSONObject responseJSON = (JSONObject) response;
+                                            String endpointID = responseJSON.getString("endpointId");
+                                            connectionID = responseJSON.getString("id");
 
-
-                                    listener.onConnect(RespokeSignalingChannel.this, endpointID, connectionID);
-                                } catch (JSONException e) {
-                                    listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
+                                            listener.onConnect(RespokeSignalingChannel.this, endpointID, connectionID);
+                                        } catch (JSONException e) {
+                                            listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
+                                        }
+                                    } else {
+                                        listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
+                                    }
                                 }
-                            } else {
-                                listener.onError("Unexpected response from server", RespokeSignalingChannel.this);
                             }
-                        }
-                    }
 
-                    @Override
-                    public void onError(String errorMessage) {
-                        if ((null != lastKnownPushTokenID) && !lastKnownPushTokenID.equals("notAvailable")) {
-                            SharedPreferences.Editor editor = prefs.edit();
-                            editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN);
-                            editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID);
-                            editor.commit();
-                        }
+                            @Override
+                            public void onError(String errorMessage
+                            ) {
+ /*
+                                if ((null != lastKnownPushTokenID) && !lastKnownPushTokenID.equals("notAvailable")) {
+                                    SharedPreferences.Editor editor = prefs.edit();
+                                    editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN);
+                                    editor.remove(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID);
+                                    editor.commit();
+                                }
+*/
+                                Listener listener = listenerReference.get();
+                                if (null != listener) {
+                                    listener.onError(errorMessage, RespokeSignalingChannel.this);
+                                }
+                            }
 
-                        Listener listener = listenerReference.get();
-                        if (null != listener) {
-                            listener.onError(errorMessage, RespokeSignalingChannel.this);
                         }
-                    }
-
-                });
+                );
             }
-        });
-    }
 
+            @Override
+            public void onDisconnect() {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            }
+
+            @Override
+            public void onMessage(String string, IOAcknowledge ioa) {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            }
+
+            @Override
+            public void onMessage(JSONObject jsono, IOAcknowledge ioa) {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            }
+        }
+        );
+    }
 
     public void disconnect() {
         workerThread.cancelAllTasks();
@@ -507,7 +502,6 @@ public class RespokeSignalingChannel {
             client.disconnect();
         }
     }
-
 
     public void registerPresence(ArrayList<String> endpointList, final RegisterPresenceListener completionListener) {
         if (connected) {
@@ -553,13 +547,11 @@ public class RespokeSignalingChannel {
         }
     }
 
-
     public void sendRESTMessage(String httpMethod, String url, JSONObject data, final RESTListener completionListener) {
         if (connected) {
             JSONArray array = new JSONArray();
 
-            try
-            {
+            try {
                 JSONObject message = new JSONObject("{'headers':{'App-Token':'" + appToken + "'},'url':'" + url + "'}");
 
                 if (null != data) {
@@ -583,7 +575,6 @@ public class RespokeSignalingChannel {
         }
     }
 
-
     private void sendEvent(final String httpMethod, final JSONArray array, final Integer attempt, final RESTListener completionListener, long delayMillis) {
         // Queue the request with the socket workerThread
         workerThread.postTaskDelayed(new Runnable() {
@@ -591,10 +582,11 @@ public class RespokeSignalingChannel {
             public void run() {
                 if (connected) {
                     final CountDownLatch asyncTaskSignal = new CountDownLatch(1);
-
-                    client.emit(httpMethod, array, new Acknowledge() {
+                    
+                    client.emit(httpMethod, array, new IOAcknowledge() {
                         @Override
-                        public void acknowledge(JSONArray arguments) {
+                        public void ack(Object... os){
+                            JSONArray arguments = new JSONArray(os);
                             // There should only ever be one element in this array. Anything else is ignored for the time being.
                             if ((arguments != null) && (arguments.length() > 0)) {
                                 try {
@@ -655,8 +647,8 @@ public class RespokeSignalingChannel {
                                             // The body of the response was decoded into JSON. Look for error messages
                                             // If there was a server error, there will be a key named 'error' or 'status'
                                             try {
-                                                errorMessage = ((JSONObject)responseBody).getString("error");
-                                                String details = ((JSONObject)responseBody).getString("details");
+                                                errorMessage = ((JSONObject) responseBody).getString("error");
+                                                String details = ((JSONObject) responseBody).getString("details");
                                                 errorMessage = errorMessage + " (" + details + ")";
                                             } catch (JSONException e) {
                                                 // If there was no 'error' key, then assume the operation was successful
@@ -666,7 +658,7 @@ public class RespokeSignalingChannel {
 
                                     if (rateLimitErrorPresent) {
                                         if (attempt < 3) {
-                                            Log.d(TAG, "Performing rate-limited retry " + attempt + 1);
+                                            Log.debug(TAG+ "Performing rate-limited retry " + attempt + 1);
                                             sendEvent(httpMethod, array, attempt + 1, completionListener, rateLimitDelay);
                                         } else {
                                             completionListener.onError("API rate limit was exceeded");
@@ -688,6 +680,8 @@ public class RespokeSignalingChannel {
                             // Signal that processing is complete and the next task in the worker thread may proceed
                             asyncTaskSignal.countDown();
                         }
+
+
                     });
 
                     try {
@@ -702,7 +696,6 @@ public class RespokeSignalingChannel {
             }
         }, delayMillis);
     }
-
 
     public void sendSignal(JSONObject message, String toEndpointID, final Respoke.TaskCompletionListener completionListener) {
         JSONObject data = new JSONObject();
@@ -728,7 +721,6 @@ public class RespokeSignalingChannel {
         }
     }
 
-
     private void routeSignal(JSONObject message) {
         try {
             JSONObject signal = (JSONObject) message.get("body");
@@ -752,7 +744,7 @@ public class RespokeSignalingChannel {
                 }
 
                 if ((null != sessionID) && (null != signalType) && (null != target)) {
-                    Log.d(TAG, "Received signal " + signalType);
+                    Log.debug(TAG+ "Received signal " + signalType);
                     boolean isDirectConnection = target.equals("directConnection");
 
                     Listener listener = listenerReference.get();
@@ -771,11 +763,11 @@ public class RespokeSignalingChannel {
                                         if (toConnection.equals(connectionID)) {
                                             call.connectedReceived();
                                         } else {
-                                            Log.d(TAG, "Another device answered, hanging up.");
+                                            Log.debug(TAG+"Another device answered, hanging up.");
                                             call.hangupReceived();
                                         }
                                     } else {
-                                        Log.d(TAG, "Unable to find out which endpoint won the call, hanging up");
+                                        Log.debug(TAG+"Unable to find out which endpoint won the call, hanging up");
                                         call.hangupReceived();
                                     }
                                 } else if (signalType.equals("iceCandidates")) {
@@ -801,21 +793,20 @@ public class RespokeSignalingChannel {
                                         listener.onIncomingCall(sdp, sessionID, fromConnection, from, timestamp, RespokeSignalingChannel.this);
                                     }
                                 } else {
-                                    Log.d(TAG, "Error: Offer missing sdp");
+                                    Log.debug(TAG+"Error: Offer missing sdp");
                                 }
                             }
                         }
                     }
                 } else {
-                    Log.d(TAG, "Error: Could not parse signal data");
+                    Log.debug(TAG+"Error: Could not parse signal data");
                 }
             } else {
-                Log.d(TAG, "Error: signal missing header data");
+                Log.debug(TAG+"Error: signal missing header data");
             }
         } catch (JSONException e) {
-            Log.d(TAG, "Unable to parse received signal");
+            Log.debug(TAG+"Unable to parse received signal");
         }
     }
-
 
 }

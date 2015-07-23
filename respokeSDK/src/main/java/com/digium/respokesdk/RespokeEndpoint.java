@@ -10,11 +10,6 @@
 
 package com.digium.respokesdk;
 
-import android.content.Context;
-import android.opengl.GLSurfaceView;
-import android.os.Handler;
-import android.os.Looper;
-import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -80,7 +75,9 @@ public class RespokeEndpoint {
     public void setListener(Listener listener) {
         listenerReference = new WeakReference<Listener>(listener);
     }
-
+    void queueRunnable(Runnable r){
+        r.run();
+    }
 
     public void sendMessage(String message, boolean push, final Respoke.TaskCompletionListener completionListener) {
         if ((null != signalingChannel) && (signalingChannel.connected)) {
@@ -110,14 +107,13 @@ public class RespokeEndpoint {
     }
 
 
-    public RespokeCall startCall(RespokeCall.Listener callListener, Context context, GLSurfaceView glView, boolean audioOnly) {
+    public RespokeCall startCall(RespokeCall.Listener callListener,  Object glView, boolean audioOnly) {
         RespokeCall call = null;
 
         if ((null != signalingChannel) && (signalingChannel.connected)) {
             call = new RespokeCall(signalingChannel, this, false);
             call.setListener(callListener);
-
-            call.startCall(context, glView, audioOnly);
+            call.startCall( glView, audioOnly);
         }
 
         return call;
@@ -154,7 +150,7 @@ public class RespokeEndpoint {
 
 
     public void didReceiveMessage(final String message, final Date timestamp) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != listenerReference) {
@@ -224,7 +220,7 @@ public class RespokeEndpoint {
             presence = newPresence;
         }
 
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != listenerReference) {

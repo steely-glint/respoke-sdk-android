@@ -10,8 +10,8 @@
 
 package com.digium.respokesdk.RestAPI;
 
-import android.content.Context;
 
+import com.phono.srtplight.Log;
 import org.json.JSONException;
 
 
@@ -23,8 +23,8 @@ public class APIGetToken extends APITransaction {
     public String endpointID;
     public String token;
 
-    public APIGetToken(Context context, String baseURL) {
-        super(context, baseURL + "/v1/tokens");
+    public APIGetToken( String baseURL) {
+        super( baseURL + "/v1/tokens");
     }
 
 

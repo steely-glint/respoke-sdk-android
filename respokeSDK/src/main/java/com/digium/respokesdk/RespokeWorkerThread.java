@@ -10,39 +10,49 @@
 
 package com.digium.respokesdk;
 
-import android.os.Handler;
-import android.os.HandlerThread;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Hashtable;
+import java.util.Timer;
+import java.util.TimerTask;
+
 
 /**
  * Implements a worker thread for queueing and processing socket transactions with the Respoke service
  */
-public class RespokeWorkerThread extends HandlerThread {
+public class RespokeWorkerThread extends Timer {
 
-    private Handler workerHandler;
-
-
-    public RespokeWorkerThread(String name) {
+    HashMap <TimerTask,TimerTask> tasks ;
+    RespokeWorkerThread(String name) {
         super(name);
+        tasks = new HashMap();
+    }
+
+    void prepareHandler() {
+        
+    }
+
+    void cancelAllTasks() {
+        for (TimerTask t:tasks.keySet()){
+            t.cancel();
+        }
+        tasks.clear();
+    }
+
+    void postTaskDelayed(final Runnable errand, long delayMillis) {
+        TimerTask t = new TimerTask(){
+            @Override
+            public void run() {
+                errand.run();
+                tasks.remove(this);
+            }
+        };
+        tasks.put(t, t);
+        this.schedule(t, delayMillis);
+    }
+
+    void start() {
     }
 
 
-    public void postTask(Runnable task){
-        workerHandler.post(task);
-    }
-
-
-    public void postTaskDelayed(Runnable task, long delayMillis){
-        workerHandler.postDelayed(task, delayMillis);
-    }
-
-
-    public void prepareHandler(){
-        workerHandler = new Handler(getLooper());
-    }
-
-
-    public void cancelAllTasks() {
-        // Cancel all pending tasks and callbacks, but leave the thread ready to run new tasks
-        workerHandler.removeCallbacksAndMessages(null);
-    }
 }

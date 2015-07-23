@@ -10,9 +10,6 @@
 
 package com.digium.respokesdk;
 
-import android.os.Handler;
-import android.os.Looper;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -91,7 +88,10 @@ public class RespokeGroup {
         joined = true;
     }
 
-
+    void queueRunnable(Runnable r){
+        r.run();
+    }
+    
     public void setListener(Listener listener) {
         listenerReference = new WeakReference<Listener>(listener);
     }
@@ -148,7 +148,7 @@ public class RespokeGroup {
                             members.clear();
                             members.addAll(nameList);
 
-                            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                            queueRunnable(new Runnable() {
                                 @Override
                                 public void run() {
                                     if (null != completionListener) {
@@ -176,7 +176,7 @@ public class RespokeGroup {
 
 
     private void postGetGroupMembersError(final GetGroupMembersCompletionListener completionListener, final String errorMessage) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 if (null != completionListener) {
@@ -280,7 +280,7 @@ public class RespokeGroup {
     public void connectionDidJoin(final RespokeConnection connection) {
         members.add(connection);
 
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();
@@ -295,7 +295,7 @@ public class RespokeGroup {
     public void connectionDidLeave(final RespokeConnection connection) {
         members.remove(connection);
 
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();
@@ -308,7 +308,7 @@ public class RespokeGroup {
 
 
     public void didReceiveMessage(final String message, final RespokeEndpoint endpoint, final Date timestamp) {
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
+        queueRunnable(new Runnable() {
             @Override
             public void run() {
                 Listener listener = listenerReference.get();

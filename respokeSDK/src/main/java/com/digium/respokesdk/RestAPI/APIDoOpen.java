@@ -10,7 +10,6 @@
 
 package com.digium.respokesdk.RestAPI;
 
-import android.content.Context;
 
 import org.json.JSONException;
 
@@ -20,8 +19,8 @@ public class APIDoOpen extends APITransaction {
     public String tokenID;
     public String appToken;
 
-    public APIDoOpen(Context context, String baseURL) {
-        super(context, baseURL + "/v1/session-tokens");
+    public APIDoOpen(String baseURL) {
+        super(baseURL + "/v1/session-tokens");
     }
 
 
