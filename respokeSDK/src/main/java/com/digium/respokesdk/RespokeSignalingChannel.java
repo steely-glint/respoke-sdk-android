@@ -34,6 +34,7 @@ import javax.websocket.RemoteEndpoint;
 import javax.websocket.SendHandler;
 import javax.websocket.SendResult;
 import org.glassfish.tyrus.client.ClientManager;
+import org.glassfish.tyrus.client.ClientProperties;
 
 /**
  * The purpose of this class is to make a method call for each API call to the
@@ -258,7 +259,7 @@ public class RespokeSignalingChannel {
 
             URI u = new URI(connectURL);
             ClientManager client = ClientManager.createClient();
-
+            client.getProperties().put(ClientProperties.LOG_HTTP_UPGRADE, true);
             client.connectToServer(RespokeSignalingChannel.class, u);
         } catch (Exception e) {
             Log.debug(TAG + "cant connect " + e.getMessage() + " url = " + connectURL);
