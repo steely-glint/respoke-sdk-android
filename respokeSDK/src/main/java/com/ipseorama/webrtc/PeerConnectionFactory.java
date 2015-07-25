@@ -8,7 +8,7 @@ package com.ipseorama.webrtc;
 
 /**
  *
- * @author Westhawk Ltd<thp@westhawk.co.uk>
+ * @author Westhawk Ltd thp@westhawk.co.uk 
  */
 public class PeerConnectionFactory {
     

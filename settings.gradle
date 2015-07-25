@@ -1,2 +1,0 @@
-include ':respokeSDKTest', ':respokeSDK'
-project(':respokeSDK').projectDir = new File('respokeSDK')

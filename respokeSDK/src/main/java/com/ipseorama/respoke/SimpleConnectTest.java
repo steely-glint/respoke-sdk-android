@@ -11,12 +11,18 @@ import com.digium.respokesdk.RespokeClient;
 import com.digium.respokesdk.RespokeDirectConnection;
 import com.digium.respokesdk.RespokeEndpoint;
 import com.digium.respokesdk.RespokeGroup;
+import com.github.nkzawa.socketio.client.Socket;
 import com.phono.srtplight.Log;
 import java.util.Date;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 /**
  *
- * @author Westhawk Ltd<thp@westhawk.co.uk>
+ * @author Westhawk Ltd thp@westhawk.co.uk 
  */
 public class SimpleConnectTest implements RespokeClient.Listener {
 
@@ -27,6 +33,27 @@ public class SimpleConnectTest implements RespokeClient.Listener {
      */
     public static void main(String[] args) {
         Log.setLevel(Log.VERB);
+        LogManager.getLogManager().getLogger(Logger.GLOBAL_LOGGER_NAME).setLevel(Level.ALL); 
+        Handler h = new Handler(){
+
+            @Override
+            public void publish(LogRecord record) {
+                Log.debug(record.toString());
+            }
+
+            @Override
+            public void flush() {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            }
+
+            @Override
+            public void close() throws SecurityException {
+                throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
+            }
+            
+        };
+        
+        LogManager.getLogManager().getLogger(Logger.GLOBAL_LOGGER_NAME).addHandler(h);
         SimpleConnectTest me = new SimpleConnectTest();
     }
 

@@ -12,7 +12,7 @@ import org.json.JSONObject;
 
 /**
  *
- * @author Westhawk Ltd<thp@westhawk.co.uk>
+ * @author Westhawk Ltd thp@westhawk.co.uk
  */
 public class RespokeCall {
 

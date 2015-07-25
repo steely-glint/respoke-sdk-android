@@ -11,30 +11,22 @@ package com.digium.respokesdk;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
-import javax.websocket.ClientEndpoint;
-import javax.websocket.CloseReason;
-import javax.websocket.OnClose;
-import javax.websocket.OnOpen;
-import javax.websocket.Session;
 
 import com.digium.respokesdk.RestAPI.APITransaction;
-import com.ipseorama.webrtc.JSONMessageDecoder;
+import com.github.nkzawa.emitter.Emitter;
+import com.github.nkzawa.socketio.client.Ack;
+import com.github.nkzawa.socketio.client.IO;
+import com.github.nkzawa.socketio.client.Socket;
 import com.phono.srtplight.Log;
-import java.io.IOException;
 
 import java.io.UnsupportedEncodingException;
 import java.lang.ref.WeakReference;
-import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import javax.websocket.RemoteEndpoint;
-import javax.websocket.SendHandler;
-import javax.websocket.SendResult;
-import org.glassfish.tyrus.client.ClientManager;
-import org.glassfish.tyrus.client.ClientProperties;
 
 /**
  * The purpose of this class is to make a method call for each API call to the
@@ -42,7 +34,6 @@ import org.glassfish.tyrus.client.ClientProperties;
  * websocket connection, Endpoint authentication, and all App interactions
  * thereafter.
  */
-@ClientEndpoint(encoders = JSONMessageDecoder.class, decoders = JSONMessageDecoder.class)
 public class RespokeSignalingChannel {
 
     private static final String TAG = "RespokeSignalingChannel: ";
@@ -55,7 +46,13 @@ public class RespokeSignalingChannel {
     private String connectionID;
     private String baseURL;
     private RespokeWorkerThread workerThread;
-    private Session session;
+    private Socket client;
+    private Emitter.Listener onJoin;
+    private Emitter.Listener onLeave;
+    private Emitter.Listener onMessage;
+    private Emitter.Listener onSignal;
+    private Emitter.Listener onPubsub;
+    private Emitter.Listener onPresence;
 
     /**
      * A delegate protocol to notify the receiver of events occurring with the
@@ -250,85 +247,83 @@ public class RespokeSignalingChannel {
     }
 
     public void authenticate() {
-        String connectURL = baseURL + ":" + RESPOKE_SOCKETIO_PORT + "?__sails_io_sdk_version=0.10.0&app-token=" + appToken;
+        String connectURL = "https://api.respoke.io/socket.io/1/";
 
-        if (connectURL.startsWith("https")) {
-            connectURL = "ws" + connectURL.substring(4);
-        }
-        try {
-
-            URI u = new URI(connectURL);
-            ClientManager client = ClientManager.createClient();
-            client.getProperties().put(ClientProperties.LOG_HTTP_UPGRADE, true);
-            client.connectToServer(RespokeSignalingChannel.class, u);
-        } catch (Exception e) {
-            Log.debug(TAG + "cant connect " + e.getMessage() + " url = " + connectURL);
-
-        }
-    }
-    /*
-     @OnOpen
-     public void onOpen(Session session) {
-     // same as above
-     }
- 
-     @OnMessage
-     public String onMessage(String message, Session session) {
-     // same as above
-     }
- 
-     @OnClose
-     public void onClose(Session session, CloseReason closeReason) {
-     logger.info(String.format("Session %s close because of %s", session.getId(), closeReason));
-     latch.countDown();
-     }
-     */
-
-    @OnOpen
-    public void onOpen(Session s) {
-        Log.debug(TAG + "Socket connected to respoke");
-        connected = true;
-        session = s;
-    }
-
-    @OnClose
-    public void OnClose(Session session, CloseReason closeReason) {
-        Log.debug(TAG + "Socket disconnected" + closeReason.getReasonPhrase());
-
-        if (connected) {
-            connected = false;
-            workerThread.cancelAllTasks();
-
-            Listener listener = listenerReference.get();
-            if (null != listener) {
-                listener.onDisconnect(RespokeSignalingChannel.this);
+        Log.debug("Connecting socket "+connectURL);
+        Emitter.Listener onError = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                    Log.debug(TAG + "Socket error" + args.toString());
             }
+        };
+        Socket socket;
+        try {
+            IO.Options opts = new IO.Options();
+            opts.query = "__sails_io_sdk_version=0.10.0&app-token=" + appToken;
+
+            socket = IO.socket(connectURL, opts);
+            setHooks();
+
+            socket.on(Socket.EVENT_CONNECT, new Emitter.Listener() {
+
+                @Override
+                public void call(Object... args) {
+                    Log.debug(TAG + "Socket connected to respoke");
+                    connected = true;
+                    client = socket;
+                    onConnect();
+                }
+
+            }).on("join", onJoin
+            ).on("leave", onLeave
+            ).on("message", onMessage
+            ).on("signal", onSignal
+            ).on("pubsub", onPubsub
+            ).on("presence", onPresence
+            ).on(Socket.EVENT_DISCONNECT, new Emitter.Listener() {
+
+                @Override
+                public void call(Object... args) {
+                    Log.debug(TAG + "Socket disconnected");
+                    socket.disconnect();
+                    client = null;
+                    if (connected) {
+                        connected = false;
+                        workerThread.cancelAllTasks();
+
+                        Listener listener = listenerReference.get();
+                        if (null != listener) {
+                            listener.onDisconnect(RespokeSignalingChannel.this);
+                        }
+                    }
+                }
+
+            }).on(Socket.EVENT_ERROR, onError).on(Socket.EVENT_CONNECT_ERROR, onError).on(Socket.EVENT_CONNECT_TIMEOUT, onError);
+            socket.connect();
+        } catch (URISyntaxException ex) {
+            Log.error("error in url " + ex.getMessage() + " " + connectURL);
         }
     }
-
-    public void onDisconnect() {
-        throw new UnsupportedOperationException("Not supported yet."); //To change body of generated methods, choose Tools | Templates.
-    }
-
 
     /*
      public void onError(SocketIOException socketIOException) {
      Log.debug(TAG + "Socket error: " + socketIOException.getMessage());
-
+            
      Listener listener = listenerReference.get();
      if (null != listener) {
      listener.onError(socketIOException.getMessage(), RespokeSignalingChannel.this);
      }
      }
      */
-    public void onMessage(JSONObject jo) {
-        String event = jo.getString("event");
-        JSONArray arguments = jo.getJSONArray("detail");
-        switch (event) {
-            case "join": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+    public void setHooks() {
+        Log.debug("Setting Hooks");
+
+        onJoin = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        JSONObject eachEvent = (JSONObject) args[ii];
                         String endpoint = eachEvent.getString("endpointId");
                         String connection = eachEvent.getString("connectionId");
                         JSONObject header = eachEvent.getJSONObject("header");
@@ -343,11 +338,13 @@ public class RespokeSignalingChannel {
                     }
                 }
             }
-
-            case "leave": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+        };
+        onLeave = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        JSONObject eachEvent = (JSONObject) args[ii];
                         String endpoint = eachEvent.getString("endpointId");
                         String connection = eachEvent.getString("connectionId");
                         JSONObject header = eachEvent.getJSONObject("header");
@@ -362,10 +359,13 @@ public class RespokeSignalingChannel {
                     }
                 }
             }
-            case "message": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+        };
+        onMessage = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        JSONObject eachEvent = (JSONObject) args[ii];
                         String message = eachEvent.getString("body");
                         JSONObject header = eachEvent.getJSONObject("header");
                         String endpoint = header.getString("from");
@@ -387,21 +387,26 @@ public class RespokeSignalingChannel {
                     }
                 }
             }
-            case "signal": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+        };
+        onSignal = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
-                        //routeSignal(eachEvent);
+                        JSONObject eachEvent = (JSONObject) args[ii];
+                        routeSignal(eachEvent);
                     } catch (JSONException e) {
                         Log.debug(TAG + "Error parsing received event");
                     }
                 }
             }
-
-            case "pubsub": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+        };
+        onPubsub = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        JSONObject eachEvent = (JSONObject) args[ii];
                         String message = eachEvent.getString("message");
                         JSONObject header = eachEvent.getJSONObject("header");
                         String endpointID = header.getString("from");
@@ -424,10 +429,13 @@ public class RespokeSignalingChannel {
                     }
                 }
             }
-            case "presence": {
-                for (int ii = 0; ii < arguments.length(); ii++) {
+        };
+        onPresence = new Emitter.Listener() {
+            @Override
+            public void call(Object... args) {
+                for (int ii = 0; ii < args.length; ii++) {
                     try {
-                        JSONObject eachEvent = arguments.getJSONObject(ii);
+                        JSONObject eachEvent = (JSONObject) args[ii];
                         Object type = eachEvent.getString("type");
                         JSONObject header = eachEvent.getJSONObject("header");
                         String endpointID = header.getString("from");
@@ -442,10 +450,14 @@ public class RespokeSignalingChannel {
                     }
                 }
             }
-        }
+        };
+
+    }
+
+    void onConnect() {
         /*
          final SharedPreferences prefs = appContext.getSharedPreferences(appContext.getPackageName(), Context.MODE_PRIVATE);
-
+                
          final String lastKnownPushTokenID = prefs.getString(RespokeClient.PROPERTY_LAST_VALID_PUSH_TOKEN_ID, "notAvailable");
          */
         JSONObject data = new JSONObject();
@@ -509,12 +521,8 @@ public class RespokeSignalingChannel {
     public void disconnect() {
         workerThread.cancelAllTasks();
 
-        if (null != session) {
-            try {
-                session.close();
-            } catch (IOException ex) {
-                Log.error("session shutdown " + ex.getMessage());
-            }
+        if (null != client) {
+            client.disconnect();
         }
     }
 
@@ -597,14 +605,10 @@ public class RespokeSignalingChannel {
             public void run() {
                 if (connected) {
                     final CountDownLatch asyncTaskSignal = new CountDownLatch(1);
-                    RemoteEndpoint.Async r = session.getAsyncRemote();
-                    r.sendObject(r, new SendHandler() {
-                        @Override
-                        public void onResult(SendResult sr) {
-                            Log.debug("sendresult was " + sr);
-                        }
+                    client.emit(httpMethod, array, new Ack() {
 
-                        public void sanitClause(String os) {
+                        @Override
+                        public void call(Object... os) {
                             JSONArray arguments = new JSONArray(os);
                             // There should only ever be one element in this array. Anything else is ignored for the time being.
                             if ((arguments != null) && (arguments.length() > 0)) {
@@ -643,7 +647,7 @@ public class RespokeSignalingChannel {
                                                 }
                                             }
                                         } catch (JSONException e) {
-                                            // If there was no status code, then assume the operation was successful
+                                            // If the limit info could not be found, use the default
                                         }
 
                                         responseBody = jsonResponse.get("body");
@@ -663,7 +667,7 @@ public class RespokeSignalingChannel {
                                         }
 
                                         if (responseBody instanceof JSONObject) {
-                                            // The body of the response was decoded into JSON. Look for error messages
+                                                    // The body of the response was decoded into JSON. Look for error messages
                                             // If there was a server error, there will be a key named 'error' or 'status'
                                             try {
                                                 errorMessage = ((JSONObject) responseBody).getString("error");
@@ -699,6 +703,7 @@ public class RespokeSignalingChannel {
                             // Signal that processing is complete and the next task in the worker thread may proceed
                             asyncTaskSignal.countDown();
                         }
+
                     });
 
                     try {
@@ -826,4 +831,4 @@ public class RespokeSignalingChannel {
         }
     }
 
-}
+};

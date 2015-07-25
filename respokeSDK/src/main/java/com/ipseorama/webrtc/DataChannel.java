@@ -10,7 +10,7 @@ import java.nio.ByteBuffer;
 
 /**
  *
- * @author Westhawk Ltd<thp@westhawk.co.uk>
+ * @author Westhawk Ltd thp@westhawk.co.uk 
  */
 public class DataChannel {
 

@@ -7,3 +7,5 @@ respokeSDK/gradle.properties
 build
 .idea
 local.properties
+/nbproject/private/
+/dist/
